@@ -1,0 +1,114 @@
+from skimage.io import imread
+# from skimage.color import rgb2gray, rgba2rgb
+import numpy as np
+import matplotlib.pylab as plt
+
+# def process_partner_blocks(blocks):
+#   #for i in range(img.shape[0]//4):
+
+def wm_embed(img):
+  img = (img*255).astype(np.uint8)
+  # plt.imshow(img)
+  # plt.show()
+  # img = img&252 # set 2lsb to 0
+  # plt.imshow(img)
+  # plt.show()
+  block_size = np.array(img.shape)//4
+  x, y = block_size
+  lookup_tb = {
+      "A":[(0, 0), (3, 1), (2, 2), (1, 3)],
+      "B":[(1, 0), (2, 1), (3, 2), (0, 3)],
+      "C":[(0, 1), (2, 0), (1, 2), (3, 3)],
+      "D":[(1, 1), (3, 0), (0, 2), (2, 3)],
+  }
+  for group, bls in lookup_tb.items():
+    recoveries = {}
+    for idx, block in enumerate(bls):
+      recoveries[idx] = b''
+      for i in range(x//4):
+        for j in range(y//4):
+          subblock = img[block[0]*x+i*4:block[0]*x+(i+1)*4, block[1]*y+j*4:block[1]*y+(j+1)*4]
+          # img[block[0]*x+i*4:(block[0]+1)*x+(i+1)*4, block[1]*y+j*4:(block[1]+1)*y+(j+1)*4] &= 252
+          recoveries[idx] += bytes([np.mean(subblock, dtype=np.uint8)])
+    # print(len(recoveries[1]+recoveries[2]+recoveries[3]))
+    re = {
+        0:int.from_bytes(recoveries[1]+recoveries[2]+recoveries[3], byteorder='big'),
+        1:int.from_bytes(recoveries[0]+recoveries[2]+recoveries[3], byteorder='big'),
+        2:int.from_bytes(recoveries[0]+recoveries[1]+recoveries[3], byteorder='big'),
+        3:int.from_bytes(recoveries[0]+recoveries[1]+recoveries[2], byteorder='big')
+    }
+    for idx, block in enumerate(bls):
+      for i in range(x):
+        for j in range(y):
+          if (y*i+j)%4 != 3:
+            # if img[block[0]*x+i, block[1]*y+j] > 255:
+            #   raise Exception("err")
+            # img[block[0]*x+i, block[1]*y+j] = 256
+            img[block[0]*x+i, block[1]*y+j] &= 252
+            img[block[0]*x+i, block[1]*y+j] |= re[idx]&3
+            re[idx] >>= 2
+      # print(re[idx])
+  # plt.imshow(img)
+  # plt.show()
+  return img
+
+def int_to_bytes(integer):
+  bstring = []
+  while integer>0:
+    bstring.append(integer&255)
+    integer >>= 8
+  return bytes(bstring[::-1])
+
+def recover_img(img):
+  img = img.astype(np.int16)
+  block_size = np.array(img.shape)//4
+  x, y = block_size
+  lookup_tb = {
+      "A":[(0, 0), (3, 1), (2, 2), (1, 3)],
+      "B":[(1, 0), (2, 1), (3, 2), (0, 3)],
+      "C":[(0, 1), (2, 0), (1, 2), (3, 3)],
+      "D":[(1, 1), (3, 0), (0, 2), (2, 3)],
+  }
+  for group, bls in lookup_tb.items():
+    re = {}
+    for idx, block in enumerate(bls):
+      re[idx] = 0
+      # for i in range(x):
+      #   for j in range(y):
+      for i in range(x-1, -1, -1):
+        for j in range(y-1, -1, -1):
+          if (y*i+j)%4 != 3:
+            re[idx] = (re[idx]<<2)|int(img[block[0]*x+i, block[1]*y+j]&3)
+      re[idx] = int_to_bytes(re[idx])
+      if len(re[idx]) < 768:
+        re[idx] = b'\x00'*(768-len(re[idx]))+re[idx]
+      # print(len(re[idx]))
+    recoveries = {
+        0: (re[1][:256], re[2][:256], re[3][:256]),
+        1: (re[0][:256], re[2][256:512], re[3][256:512]),
+        2: (re[0][256:512], re[1][256:512], re[3][512:]),
+        3: (re[0][512:], re[1][512:], re[2][512:])
+    }
+    for idx, block in enumerate(bls):
+      for i in range(x//4):
+        for j in range(y//4):
+          subblock = img[block[0]*x+i*4:block[0]*x+(i+1)*4, block[1]*y+j*4:block[1]*y+(j+1)*4]
+          recv_mean = np.mean(subblock, dtype=np.uint8)
+          mean_of_recoveries = np.mean([recoveries[idx][n][i*y//4+j] for n in range(3)], dtype=np.uint8)
+
+          if mean_of_recoveries - recv_mean > 3:
+            # print(f"{mean_of_recoveries - recv_mean}")
+            img[block[0]*x+i*4:block[0]*x+(i+1)*4, block[1]*y+j*4:block[1]*y+(j+1)*4] += int(mean_of_recoveries) - int(recv_mean)
+  plt.imshow(img)
+  plt.show()
+
+    
+      
+      
+    
+plt.gray()
+processed = wm_embed(imread("hq.jpg", as_gray=True))
+processed[200:, 200:] = 0
+plt.imshow(processed)
+plt.show()
+recover_img(processed)
